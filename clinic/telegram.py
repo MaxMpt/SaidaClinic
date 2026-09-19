@@ -11,8 +11,18 @@ from django.conf import settings
 import urllib.request
 
 
+def admin_ids() -> list[str]:
+    raw = str(getattr(settings, "ADMIN_TELEGRAM_ID", "6935237776") or "6935237776")
+    ids = [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
+    return ids or ["6935237776"]
+
+
 def admin_id() -> str:
-    return str(getattr(settings, "ADMIN_TELEGRAM_ID", "6935237776"))
+    return admin_ids()[0]
+
+
+def is_admin_tid(tid: str | int | None) -> bool:
+    return str(tid or "") in admin_ids()
 
 
 def parse_init_data(init_data: str) -> dict | None:
@@ -61,7 +71,7 @@ def telegram_send(chat_id: str | int, text: str, extra: dict | None = None) -> b
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=12) as res:
+        with urllib.request.urlopen(req, timeout=4) as res:
             body = json.loads(res.read().decode())
             return bool(body.get("ok"))
     except Exception:
@@ -79,7 +89,7 @@ def telegram_api(method: str, payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=12) as res:
+        with urllib.request.urlopen(req, timeout=4) as res:
             return json.loads(res.read().decode())
     except Exception:
         return {}

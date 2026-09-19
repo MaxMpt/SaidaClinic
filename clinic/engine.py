@@ -32,7 +32,7 @@ from .slots import (
     time_to_min,
     ymd,
 )
-from .telegram import admin_id, telegram_api, telegram_send
+from .telegram import admin_id, admin_ids, is_admin_tid, telegram_api, telegram_send
 
 EMPTY_INTAKE = {
     "pregnancy": False,
@@ -103,7 +103,8 @@ def load_settings() -> dict:
         "prepayDefaultAmount": int(m.get("prepay_default_amount") or 0),
         "holdMinutes": int(m.get("hold_minutes") or 15),
         "phone": m.get("phone") or "",
-        "adminTelegramId": m.get("admin_telegram_id") or admin_id(),
+        "adminTelegramId": admin_id(),
+        "adminIds": admin_ids(),
         "adminUsername": "",
     }
 
@@ -214,14 +215,19 @@ def slots_for(service: Service, day: date, settings: dict) -> list[int]:
 
 def upsert_client(user: dict, touch_seen: bool = False) -> str:
     tid = str(user["telegram_id"])
-    role = "admin" if tid == admin_id() else "client"
     username = user.get("username") or ""
     first = user.get("first_name") or "Гость"
     last = user.get("last_name") or ""
     obj, created = Client.objects.get_or_create(
         telegram_id=tid,
-        defaults={"username": username, "first_name": first, "last_name": last, "role": role},
+        defaults={
+            "username": username,
+            "first_name": first,
+            "last_name": last,
+            "role": "admin" if is_admin_tid(tid) else "client",
+        },
     )
+    role = "admin" if is_admin_tid(tid) or obj.role == "admin" else "client"
     if not created:
         changed = (
             obj.username != username
@@ -238,12 +244,15 @@ def upsert_client(user: dict, touch_seen: bool = False) -> str:
     return role
 
 
-def resolve_admin_username() -> str:
-    card = Client.objects.filter(telegram_id=admin_id()).first()
+def resolve_admin_username(*, fetch: bool = False) -> str:
+    card = (
+        Client.objects.filter(telegram_id__in=admin_ids())
+        .exclude(username="")
+        .first()
+    )
     if card and card.username:
         return card.username
-    token = getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
-    if not token:
+    if not fetch:
         return ""
     data = telegram_api("getChat", {"chat_id": admin_id()})
     result = data.get("result") or {}
@@ -265,7 +274,7 @@ def notify(kind: str, title: str, body: str, appointment_id: int | None = None) 
 
 
 def notify_admin_telegram(text: str) -> None:
-    username = resolve_admin_username()
+    username = resolve_admin_username(fetch=True)
     if username:
         if telegram_send(f"@{username.lstrip('@')}", text):
             return
@@ -341,7 +350,7 @@ def next_slots(settings: dict, services: list[Service], limit: int = 4) -> list[
 def bootstrap(client_key: str, is_admin: bool, telegram_id: str) -> dict:
     expire_holds()
     settings_obj = load_settings()
-    settings_obj["adminUsername"] = resolve_admin_username()
+    settings_obj["adminUsername"] = resolve_admin_username(fetch=False)
     qs = Service.objects.all() if is_admin else Service.objects.filter(active=True)
     services = list(qs)
     appts_qs = Appointment.objects.select_related("service").order_by("day", "start_min")
@@ -402,6 +411,11 @@ def bootstrap(client_key: str, is_admin: bool, telegram_id: str) -> dict:
         "reviews": [],
         "reviewable": [],
         "client": dump_client(telegram_id),
+        "me": {
+            "telegramId": telegram_id,
+            "isAdmin": bool(is_admin),
+            "name": dump_client(telegram_id).get("firstName") or "",
+        },
     }
 
 

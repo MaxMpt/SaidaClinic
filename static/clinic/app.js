@@ -1,4 +1,12 @@
 const ADMIN_ID = "6935237776";
+function adminIds() {
+  const extra = Array.isArray(window.ADMIN_IDS) ? window.ADMIN_IDS : [];
+  const fromData = state.data?.settings?.adminIds || [];
+  return [...new Set([ADMIN_ID, ...extra, ...fromData].map(String).filter(Boolean))];
+}
+function isAdminUser(id) {
+  return adminIds().includes(String(id || ""));
+}
 const INTAKE = [
   ["pregnancy", "Беременность или грудное вскармливание"],
   ["herpes", "Герпес или воспаление на лице"],
@@ -47,7 +55,12 @@ const state = {
 };
 
 function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
+  return String(s ?? "")
+    .replaceAll("&", "\u0026amp;")
+    .replaceAll("<", "\u0026lt;")
+    .replaceAll(">", "\u0026gt;")
+    .replaceAll('"', "\u0026quot;")
+    .replaceAll("'", "\u0026#39;");
 }
 function money(n) { return `${Number(n || 0).toLocaleString("ru-RU")} ₽`; }
 function pad(n) { return String(n).padStart(2, "0"); }
@@ -96,13 +109,20 @@ function bootTg() {
   const u = readUser();
   if (u?.id) {
     state.tg = u;
-    const admin = String(u.id) === ADMIN_ID;
+    const admin = isAdminUser(u.id);
     state.profile = { key: `tg-${u.id}`, name: u.first_name, role: admin ? "admin" : "client" };
     if (admin) state.tab = "admin";
   }
 }
 async function load() {
   state.data = await api("/api/bootstrap", {});
+  const me = state.data.me || {};
+  const admin = !!(me.isAdmin || isAdminUser(me.telegramId) || isAdminUser(state.tg?.id));
+  if (admin) {
+    state.profile.role = "admin";
+    if (state.tab === "home") state.tab = "admin";
+  }
+  if (me.name) state.profile.name = me.name;
   const c = state.data.client;
   if (c?.telegramId && !c.intakeDone && state.profile.role !== "admin") state.overlay = "intake";
   render();
@@ -545,5 +565,11 @@ function bind() {
 
 bootTg();
 render();
-load().catch((e) => { state.toast = e.message; render(); });
-setTimeout(() => { if (!state.tg && readUser()) { bootTg(); load(); } }, 200);
+(async () => {
+  const t0 = Date.now();
+  while (!readUser() && Date.now() - t0 < 1200) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  bootTg();
+  try { await load(); } catch (e) { state.toast = e.message; render(); }
+})();

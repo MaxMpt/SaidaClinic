@@ -96,10 +96,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 X_FRAME_OPTIONS = "ALLOWALL"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 if not DEBUG:
-    CSRF_COOKIE_SECURE = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SAMESITE = "None"
-    SESSION_COOKIE_SAMESITE = "None"
+    use_https = (os.environ.get("MINI_APP_URL") or "").startswith("https")
+    CSRF_COOKIE_SECURE = use_https
+    SESSION_COOKIE_SECURE = use_https
+    CSRF_COOKIE_SAMESITE = "None" if use_https else "Lax"
+    SESSION_COOKIE_SAMESITE = "None" if use_https else "Lax"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 MINI_APP_URL = mini

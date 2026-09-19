@@ -22,7 +22,7 @@ from .models import (
     Waitlist,
 )
 from .slots import parse_ymd, time_to_min
-from .telegram import admin_id, parse_init_data, set_webhook, telegram_send
+from .telegram import admin_id, admin_ids, parse_init_data, set_webhook, telegram_send
 
 
 def _body(request) -> dict:
@@ -58,8 +58,6 @@ def _actor(request) -> tuple[str, bool, str, dict]:
         role = engine.upsert_client(ident)
         tid = ident["telegram_id"]
         return f"tg-{tid}", role == "admin", tid, data
-    if getattr(settings, "TELEGRAM_BOT_TOKEN", ""):
-        raise PermissionError("Откройте кабинет из Telegram")
     key = data.get("clientKey") or "anna"
     return key, bool(data.get("isAdmin")), key, data
 
@@ -71,7 +69,7 @@ def _err(exc: Exception, status: int = 400):
 @ensure_csrf_cookie
 @require_GET
 def index(request):
-    return render(request, "clinic/index.html")
+    return render(request, "clinic/index.html", {"admin_ids_json": json.dumps(admin_ids())})
 
 
 @require_POST
