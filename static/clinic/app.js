@@ -76,6 +76,18 @@ function csrf() {
 function tg() { return window.Telegram?.WebApp; }
 function initData() { return tg()?.initData || ""; }
 function readUser() { return tg()?.initDataUnsafe?.user || null; }
+function haptic(kind) {
+  const h = tg()?.HapticFeedback;
+  try {
+    if (h) {
+      if (kind === "success" || kind === "error" || kind === "warning") h.notificationOccurred(kind);
+      else if (kind === "select") h.selectionChanged();
+      else h.impactOccurred(kind === "heavy" ? "medium" : "light");
+    } else if (navigator.vibrate) {
+      navigator.vibrate(kind === "error" ? [12, 30, 12] : kind === "heavy" ? 24 : 10);
+    }
+  } catch (_) {}
+}
 
 async function api(path, body) {
   const user = readUser();
@@ -105,7 +117,19 @@ function toast(msg) {
 function bootTg() {
   const w = tg();
   if (!w) return;
-  try { w.ready(); w.expand(); w.disableVerticalSwipes?.(); w.setHeaderColor?.("#F6F0ED"); w.setBackgroundColor?.("#F6F0ED"); } catch (_) {}
+  const syncH = () => {
+    const h = w.viewportStableHeight || w.viewportHeight || window.innerHeight;
+    document.documentElement.style.setProperty("--tg-viewport-stable-height", `${Math.round(h)}px`);
+  };
+  try {
+    w.ready();
+    w.expand();
+    w.disableVerticalSwipes?.();
+    w.setHeaderColor?.("#F6F0ED");
+    w.setBackgroundColor?.("#F6F0ED");
+    syncH();
+    w.onEvent?.("viewportChanged", syncH);
+  } catch (_) {}
   const u = readUser();
   if (u?.id) {
     state.tg = u;
@@ -163,9 +187,13 @@ function home() {
     </div>
     <img class="hero" src="/static/clinic-room.jpg" alt="">
     <button class="btn wide" data-go="book">Записаться</button>
+    ${next ? `<button class="card" style="width:100%;text-align:left" data-go="book">
+      <div class="kicker">Ближайшее окно</div>
+      <b>${esc(next.serviceTitle)}</b>
+      <div class="sm muted mt">${dayShort(next.day)} в ${minToTime(next.startMin)}</div>
+    </button>` : ""}
     ${d.services.map((s) => `<button class="card" style="width:100%;text-align:left" data-pick="${s.id}"><b>${esc(s.title)}</b><div class="sm muted mt">${s.durationMin} мин · ${money(s.price)}</div></button>`).join("")}
     <button class="card" style="width:100%;text-align:left" data-overlay="about"><div class="kicker">О нас</div><div class="sm">Кабинет и подход</div></button>
-    ${next ? `<p class="sm muted">Свободное окно: ${esc(next.serviceTitle)} · ${dayShort(next.day)} в ${minToTime(next.startMin)}</p>` : ""}
   </div>`;
 }
 
@@ -215,6 +243,9 @@ function care() {
   const products = d.careProducts || [];
   if (!state.careActive && cats[0]) state.careActive = cats[0].id;
   return `<div>
+    <div class="chips" style="margin:0 -4px 8px">
+      ${cats.map((c) => `<button class="chip ${state.careActive === c.id ? "on" : ""}" data-jump="${c.id}">${esc(c.title)}</button>`).join("")}
+    </div>
     <p class="kicker">Витрина</p>
     <h2 class="h2">Уход домой</h2>
     <p class="sm muted mt">То, что стоит на полке кабинета может стоять у вас дома</p>
@@ -232,19 +263,15 @@ function care() {
   </div>`;
 }
 
-function careChips() {
-  const cats = state.data?.careCategories || [];
-  if (state.tab !== "care" || !state.chipsOpen) return "";
-  return `<div class="chips" style="padding:8px 20px">${cats.map((c) => `<button class="chip ${state.careActive === c.id ? "on" : ""}" data-jump="${c.id}">${esc(c.title)}</button>`).join("")}</div>`;
-}
-
 function visits() {
   const d = state.data;
   const now = new Date();
   const today = ymd(now);
   const mins = now.getHours() * 60 + now.getMinutes();
-  const upcoming = (d.appointments || []).filter((a) => ["hold", "confirmed", "arrived"].includes(a.status) && (a.day > today || (a.day === today && a.startMin >= mins)));
-  const past = (d.appointments || []).filter((a) => !upcoming.some((u) => u.id === a.id));
+  const key = state.profile.key;
+  const mine = (d.appointments || []).filter((a) => a.clientKey === key);
+  const upcoming = mine.filter((a) => ["hold", "confirmed", "arrived"].includes(a.status) && (a.day > today || (a.day === today && a.startMin >= mins)));
+  const past = mine.filter((a) => !upcoming.some((u) => u.id === a.id));
   const shown = state.historyOpen || past.length <= 3 ? past : past.slice(0, 3);
   return `<div class="space">
     <h2 class="h3">Визиты</h2>
@@ -310,7 +337,10 @@ function admin() {
         <button class="btn sm" data-st="${a.id}" data-to="completed">Проведена</button>
       </div></div>`).join("") : `<p class="sm muted">В этот день записей нет.</p>`}
     ${closed ? `<button class="btn outline wide" data-openday="1">Открыть день</button>` : `<button class="btn outline wide" data-closeday="1">Закрыть день как выходной</button>`}
-    ${(d.notifications || []).slice(0, 8).map((n) => `<div class="tiny muted">${esc(n.title)} — ${esc(n.body)}</div>`).join("")}
+    ${(d.notifications || []).slice(0, 8).map((n) => `<article class="card">
+      <div class="sm"><b>${esc(n.title)}</b></div>
+      <div class="tiny muted mt">${esc(n.body)}</div>
+    </article>`).join("")}
   </div>`;
 }
 
@@ -324,7 +354,7 @@ function overlayHtml() {
   }
   if (o === "about") {
     const blocks = d.settings.aboutBlocks || [];
-    return `<div class="overlay"><div class="header"><button data-close="1">${icon("left")}</button></div><div class="body"><p class="kicker">О нас</p><h2 class="h2">${esc(d.settings.clinicName)}</h2>${blocks.map((b) => b.type === "image" ? `<img class="hero mt" src="${esc(b.src)}" alt="">` : `<p class="sm mt">${esc(b.text)}</p>`).join("")}</div></div>`;
+    return `<div class="overlay"><div class="header"><button data-close="1">${icon("left")}</button></div><div class="body"><p class="kicker">О нас</p><h2 class="h2">${esc(d.settings.clinicName)}</h2>${blocks.map((b) => b.type === "image" ? `<img class="photo mt" src="${esc(b.src)}" alt="">` : `<p class="sm mt">${esc(b.text)}</p>`).join("")}</div></div>`;
   }
   if (typeof o === "object" && o.kind === "product") {
     const p = o.p;
@@ -399,7 +429,6 @@ function view() {
   const page = { home: home, book: book, care: care, profile: profile, admin: admin }[state.tab] || home;
   return `<section class="shell" id="clinic-shell">
     <header class="header"><p class="brand">Doc Saya</p></header>
-    <div id="care-chip-slot">${careChips()}</div>
     <div class="scroll" id="clinic-scroll">${page()}</div>
     ${tabs()}
     ${overlayHtml()}
@@ -442,7 +471,12 @@ function openBuy(p) {
 function bind() {
   const root = document.getElementById("app");
   root.onclick = async (e) => {
+    const btn = e.target.closest("button");
     const t = e.target.closest("[data-tab],[data-go],[data-pick],[data-day],[data-slot],[data-confirm],[data-wait],[data-prod],[data-buy],[data-close],[data-overlay],[data-svc],[data-jump],[data-int],[data-intake],[data-intake-done],[data-reschedule],[data-cancel],[data-pay],[data-hist],[data-ad],[data-closeday],[data-openday],[data-st],[data-prepay-toggle],[data-prepay-save],[data-save-prices],[data-save-pprices],[data-save-about],[data-save-hours],[data-m]");
+    if (btn || t) {
+      const heavy = t && (t.dataset.confirm || t.dataset.buy || t.dataset.savePrices || t.dataset.savePprices || t.dataset.saveAbout || t.dataset.saveHours || t.dataset.prepaySave || t.dataset.closeday);
+      haptic(t?.dataset.tab || t?.dataset.jump || t?.dataset.slot || t?.dataset.int ? "select" : heavy ? "heavy" : "light");
+    }
     if (!t) return;
     try {
       if (t.dataset.tab) { state.tab = t.dataset.tab; state.overlay = null; document.getElementById("clinic-scroll") && (document.getElementById("clinic-scroll").scrollTop = 0); render(); if (state.tab === "book") loadGrid(); return; }
@@ -480,7 +514,7 @@ function bind() {
       if (t.dataset.svc) { state.overlay = { kind: "service", s: state.data.services.find((x) => x.id === Number(t.dataset.svc)) }; render(); return; }
       if (t.dataset.jump) {
         state.careActive = Number(t.dataset.jump);
-        render();
+        root.querySelectorAll("[data-jump]").forEach((el) => el.classList.toggle("on", Number(el.dataset.jump) === state.careActive));
         document.getElementById(`care-cat-${t.dataset.jump}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
         return;
       }
@@ -536,6 +570,7 @@ function bind() {
         toast("Часы сохранены"); await load(); return;
       }
     } catch (err) {
+      haptic("error");
       toast(err.message || "Не получилось");
     }
   };
@@ -547,20 +582,6 @@ function bind() {
       window.__intakeT = setTimeout(() => api("/api/intake", { answers: state.data.client.intake }).catch(() => {}), 400);
     }
   };
-  const scroll = document.getElementById("clinic-scroll");
-  if (scroll && state.tab === "care") {
-    let last = scroll.scrollTop;
-    let freeze = 0;
-    scroll.onscroll = () => {
-      const y = scroll.scrollTop;
-      const dy = y - last;
-      last = y;
-      if (Date.now() < freeze) return;
-      if (y < 10) { if (!state.chipsOpen) { state.chipsOpen = true; render(); } return; }
-      if (dy > 4 && state.chipsOpen) { state.chipsOpen = false; freeze = Date.now() + 280; render(); }
-      else if (dy < -1 && !state.chipsOpen) { state.chipsOpen = true; freeze = Date.now() + 280; render(); }
-    };
-  }
 }
 
 bootTg();

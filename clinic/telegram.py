@@ -25,25 +25,33 @@ def is_admin_tid(tid: str | int | None) -> bool:
     return str(tid or "") in admin_ids()
 
 
+def extract_user(init_data: str) -> dict | None:
+    if not init_data:
+        return None
+    params = dict(parse_qsl(init_data, keep_blank_values=True))
+    user_raw = params.get("user")
+    if not user_raw:
+        return None
+    try:
+        u = json.loads(user_raw)
+    except json.JSONDecodeError:
+        return None
+    if not u.get("id"):
+        return None
+    return {
+        "telegram_id": str(u["id"]),
+        "first_name": u.get("first_name") or "Гость",
+        "last_name": u.get("last_name") or "",
+        "username": u.get("username") or "",
+    }
+
+
 def parse_init_data(init_data: str) -> dict | None:
     if not init_data:
         return None
     params = dict(parse_qsl(init_data, keep_blank_values=True))
     given = params.pop("hash", "")
-    user_raw = params.get("user")
-    user = None
-    if user_raw:
-        try:
-            u = json.loads(user_raw)
-            if u.get("id"):
-                user = {
-                    "telegram_id": str(u["id"]),
-                    "first_name": u.get("first_name") or "Гость",
-                    "last_name": u.get("last_name") or "",
-                    "username": u.get("username") or "",
-                }
-        except json.JSONDecodeError:
-            user = None
+    user = extract_user(init_data)
     token = getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
     if not token:
         return user

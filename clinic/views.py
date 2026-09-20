@@ -22,7 +22,7 @@ from .models import (
     Waitlist,
 )
 from .slots import parse_ymd, time_to_min
-from .telegram import admin_id, admin_ids, parse_init_data, set_webhook, telegram_send
+from .telegram import admin_id, admin_ids, extract_user, parse_init_data, telegram_send
 
 
 def _body(request) -> dict:
@@ -58,8 +58,23 @@ def _actor(request) -> tuple[str, bool, str, dict]:
         role = engine.upsert_client(ident)
         tid = ident["telegram_id"]
         return f"tg-{tid}", role == "admin", tid, data
-    key = data.get("clientKey") or "anna"
-    return key, bool(data.get("isAdmin")), key, data
+    unsigned = extract_user(data.get("initData") or "")
+    if not unsigned:
+        tg = data.get("telegram") or {}
+        tid = str(tg.get("telegramId") or tg.get("telegram_id") or "")
+        if tid:
+            unsigned = {
+                "telegram_id": tid,
+                "first_name": tg.get("firstName") or tg.get("first_name") or "Гость",
+                "last_name": tg.get("lastName") or tg.get("last_name") or "",
+                "username": tg.get("username") or "",
+            }
+    if unsigned:
+        tid = unsigned["telegram_id"]
+        return f"tg-{tid}", False, tid, data
+    if getattr(settings, "TELEGRAM_BOT_TOKEN", "") and not settings.DEBUG:
+        raise PermissionError("Откройте кабинет из Telegram")
+    return "anna", False, "anna", data
 
 
 def _err(exc: Exception, status: int = 400):
@@ -452,15 +467,18 @@ def api_telegram(request):
     )
     if not text.startswith("/start"):
         return JsonResponse({"ok": True})
-    set_webhook()
-    mini = getattr(settings, "MINI_APP_URL", "") or ""
+    mini = (getattr(settings, "MINI_APP_URL", "") or "").rstrip("/")
+    name = (frm.get("first_name") or "").strip()
     extra = {}
     if mini:
-        extra["reply_markup"] = {"inline_keyboard": [[{"text": "Открыть кабинет", "web_app": {"url": mini}}]]}
-    hello = (
-        "Сая, кабинет открыт. Запись, график и витрина — в Mini App."
-        if role == "admin"
-        else "Здравствуйте. Я Сая. Запись и уходовая косметика — в Mini App, слот не раздвоится."
-    )
+        extra["reply_markup"] = {
+            "inline_keyboard": [[{"text": "Открыть кабинет", "web_app": {"url": mini}}]]
+        }
+    if role == "admin":
+        hello = "Сая, кабинет на месте. Запись, график и витрина — по кнопке ниже."
+    elif name:
+        hello = f"Здравствуйте, {name}. Я Сая. Запись на процедуру и уход с полки кабинета — внутри приложения."
+    else:
+        hello = "Здравствуйте. Я Сая. Запись на процедуру и уход с полки кабинета — внутри приложения."
     telegram_send(frm["id"], hello, extra)
     return JsonResponse({"ok": True})
